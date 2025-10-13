@@ -159,4 +159,7 @@ storybook-static
 .netlify
 
 # Sentry
-.sentryclirc.mcp.json
+.sentryclirc
+
+# MCP configuration (contains sensitive API keys)
+.mcp.json
