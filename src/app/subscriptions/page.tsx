@@ -152,10 +152,41 @@ function SubscriptionsContent() {
   const formatPrice = (price: Plan['price']) => {
     if (price.amount === 0) return 'Free';
     const amount = price.amount / 100;
-    return `$${amount}/${price.interval_type || 'month'}`;
+    const currency = price.currency?.toUpperCase() || 'EUR';
+    const symbol = currency === 'EUR' ? '€' : currency === 'USD' ? '$' : currency;
+    return `${symbol}${amount}/${price.interval_type || 'month'}`;
   };
 
   const formatFeatureValue = (key: string, value: unknown) => {
+    // Handle object values from database
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const obj = value as Record<string, unknown>;
+
+      // Handle storage format: {limit: 10, unit: "GB"}
+      if (key === 'storage' && 'limit' in obj && 'unit' in obj) {
+        return `${obj.limit} ${obj.unit}`;
+      }
+
+      // Handle API calls format: {limit: 10000, unit: "per_month"}
+      if (key === 'api_calls' && 'limit' in obj) {
+        const limit = obj.limit as number;
+        return limit === -1 ? 'Unlimited' : limit.toLocaleString();
+      }
+
+      // Handle support format: {type: "email"}
+      if (key === 'support' && 'type' in obj) {
+        const type = obj.type as string;
+        return type.charAt(0).toUpperCase() + type.slice(1);
+      }
+
+      // Handle users format: {limit: 5}
+      if (key === 'users' && 'limit' in obj) {
+        const limit = obj.limit as number;
+        return limit === -1 ? 'Unlimited' : limit.toLocaleString();
+      }
+    }
+
+    // Handle simple values
     if (value === true) return 'Yes';
     if (value === false) return 'No';
     if (value === -1) return 'Unlimited';
@@ -168,6 +199,10 @@ function SubscriptionsContent() {
 
   const getFeatureLabel = (key: string) => {
     const labels: Record<string, string> = {
+      api_calls: 'API Calls/Month',
+      storage: 'Storage',
+      support: 'Support',
+      users: 'Users',
       max_users: 'Max Users',
       api_calls_per_month: 'API Calls/Month',
       storage_gb: 'Storage',
