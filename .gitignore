@@ -160,3 +160,6 @@ storybook-static
 
 # Sentry
 .sentryclirc
+
+# MCP configuration (contains sensitive API keys)
+.mcp.json
