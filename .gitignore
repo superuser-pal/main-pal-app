@@ -163,3 +163,7 @@ storybook-static
 
 # MCP configuration (contains sensitive API keys)
 .mcp.json
+
+# BMAD (local only)
+.bmad-core/
+.bmad-*/
