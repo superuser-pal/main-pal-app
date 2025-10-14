@@ -1,0 +1,30 @@
+# C. Environment Variables
+
+```bash
+# Existing (from SaaS accelerator)
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=
+SUPABASE_SECRET_KEY=
+STRIPE_SECRET_KEY=
+NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=
+STRIPE_WEBHOOK_SECRET=
+NEXT_PUBLIC_APP_URL=
+
+# New (for PromptPal)
+API_KEY_ENCRYPTION_SECRET=          # 32-byte hex string for AES-256
+MAX_PROMPTS_FREE=100
+MAX_PROMPTS_PRO=1000
+MAX_FOLDERS_FREE=10
+MAX_FOLDERS_PRO=50
+API_EXECUTIONS_FREE=10
+API_EXECUTIONS_PRO=100
+API_EXECUTIONS_ENTERPRISE=1000
+```
+
+---
+
+**End of PRD**
+
+---
+
+_This PRD was generated using BMAD methodology and converted from original feature requirements. Last updated: 2025-10-14_
