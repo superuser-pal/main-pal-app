@@ -1,0 +1,10 @@
+-- This is a placeholder for the initial PromptPal schema migration
+-- 
+-- To create the actual migration, run:
+-- supabase migration new create_prompts_schema
+--
+-- Then copy the schema from docs/architecture.md lines 952-1073
+-- into the generated migration file.
+--
+-- This ensures proper timestamp ordering and Supabase CLI integration.
+

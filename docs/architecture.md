@@ -92,29 +92,51 @@ PromptPal implements a **server-rendered Next.js application with progressive en
 
 ### Repository Structure
 
-**Structure**: Monorepo (single repository, multiple logical packages)
+**Structure**: Single Next.js application (monolithic)
 
-**Monorepo Tool**: npm workspaces (lightweight, already configured)
+**Code Organization**: Feature-based within `src/` directory
 
-**Package Organization**:
+**Rationale**: Maintains existing brownfield structure without introducing workspace complexity. Business logic in `src/lib/` is independently testable while following Next.js App Router conventions.
+
+**Directory Structure**:
 
 ```
 main-pal-app/                    # Root (existing)
 ├── src/                         # Main Next.js application (existing)
 │   ├── app/                     # App Router pages & API routes
-│   ├── components/              # React components
-│   ├── lib/                     # Shared utilities
-│   └── types/                   # TypeScript definitions
-├── packages/                    # Shared packages (NEW)
-│   ├── prompt-engine/           # Variable substitution, validation logic
-│   │   └── package.json         # Independent, testable package
-│   └── llm-providers/           # LLM API client wrappers
-│       └── package.json         # OpenAI, Anthropic integrations
-├── supabase/                    # Database migrations (NEW)
+│   │   ├── api/
+│   │   │   ├── prompts/        # Prompt CRUD endpoints (NEW)
+│   │   │   ├── modules/        # Module management (NEW)
+│   │   │   ├── folders/        # Folder operations (NEW)
+│   │   │   └── llm/            # LLM execution (NEW)
+│   │   ├── library/            # Prompt library UI (NEW)
+│   │   └── prompts/            # Prompt builder & executor UI (NEW)
+│   ├── components/              # React components (existing)
+│   │   ├── prompts/            # Prompt-specific components (NEW)
+│   │   │   ├── PromptCard.tsx
+│   │   │   ├── PromptBuilder.tsx
+│   │   │   ├── ModuleEditor.tsx
+│   │   │   ├── VariableForm.tsx
+│   │   │   └── PromptPreview.tsx
+│   │   └── folders/            # Folder management (NEW)
+│   │       └── FolderTree.tsx
+│   ├── lib/                     # Shared utilities & business logic (existing)
+│   │   ├── prompts.ts          # Prompt utilities (NEW)
+│   │   ├── modules.ts          # Module logic (NEW)
+│   │   ├── variables.ts        # Variable substitution engine (NEW)
+│   │   └── llm-providers.ts    # LLM API client wrappers (NEW)
+│   └── types/                   # TypeScript definitions (existing)
+│       ├── prompts.ts          # Prompt types (NEW)
+│       ├── modules.ts          # Module types (NEW)
+│       └── variables.ts        # Variable types (NEW)
+├── supabase/                    # Database layer (NEW)
 │   └── migrations/              # SQL migration files
 ├── tests/                       # E2E tests (existing, extend)
+│   ├── prompts/                # Prompt feature tests (NEW)
+│   └── utils/                  # Test helpers (existing)
 ├── docs/                        # Documentation (existing)
-└── package.json                 # Root package with workspaces config
+│   └── prd/                    # Product requirements (existing)
+└── package.json                 # Single package configuration (existing)
 ```
 
 ### High Level Architecture Diagram
@@ -1095,6 +1117,70 @@ CREATE TRIGGER update_variables_updated_at BEFORE UPDATE ON variables
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 ```
 
+### Migration Workflow
+
+**Prerequisites:**
+```bash
+npm install -g supabase  # Install Supabase CLI
+supabase link --project-ref <your-project-ref>  # Link to your project
+```
+
+**Creating the Initial Migration:**
+```bash
+# Create timestamped migration file
+supabase migration new create_prompts_schema
+
+# Copy the complete schema above (lines 952-1117) into:
+# supabase/migrations/YYYYMMDDHHMMSS_create_prompts_schema.sql
+
+# Test locally
+supabase db reset  # Resets local DB and applies all migrations
+
+# Generate TypeScript types
+supabase gen types typescript --local > src/types/database.ts
+```
+
+**Development Workflow:**
+```bash
+# 1. Make schema changes in new migration file
+supabase migration new add_feature_name
+
+# 2. Write migration SQL
+# Edit: supabase/migrations/YYYYMMDDHHMMSS_add_feature_name.sql
+
+# 3. Test locally
+supabase db reset
+
+# 4. Regenerate types
+supabase gen types typescript --local > src/types/database.ts
+
+# 5. Commit migration to git
+git add supabase/migrations/ src/types/database.ts
+git commit -m "feat: add feature_name schema"
+```
+
+**Deploying to Production:**
+```bash
+# Push migrations to remote Supabase
+supabase db push
+
+# Verify in Supabase Dashboard
+# Check: Database > Migrations tab
+```
+
+**Schema Drift Prevention:**
+1. **Never** manually edit database via Supabase Dashboard SQL editor
+2. **Always** create migrations for schema changes
+3. **Commit** migrations to git before deploying
+4. **Regenerate** TypeScript types after each migration
+5. **Test** migrations locally before pushing to production
+
+**Migration Naming Convention:**
+- `YYYYMMDDHHMMSS_create_prompts_schema.sql` - Initial schema
+- `YYYYMMDDHHMMSS_add_folders_table.sql` - Add new table
+- `YYYYMMDDHHMMSS_add_prompt_search_index.sql` - Performance optimization
+- `YYYYMMDDHHMMSS_update_rls_policies.sql` - Security updates
+
 ### Existing Tables (Retain)
 - `auth.users` - Supabase Auth users
 - `subscriptions` - User subscription records
@@ -1104,9 +1190,9 @@ CREATE TRIGGER update_variables_updated_at BEFORE UPDATE ON variables
 
 ---
 
-## Unified Project Structure
+## Complete Project Structure
 
-Complete monorepo structure accommodating frontend, backend, and shared packages.
+Full Next.js application structure showing existing foundation and new PromptPal features.
 
 ```
 main-pal-app/
@@ -1166,21 +1252,6 @@ main-pal-app/
 │   │   ├── modules.ts                # NEW
 │   │   └── variables.ts              # NEW
 │   └── middleware.ts                 # Route protection (existing)
-├── packages/                         # NEW: Shared packages
-│   ├── prompt-engine/                # Variable substitution logic
-│   │   ├── src/
-│   │   │   ├── assemble.ts
-│   │   │   ├── validate.ts
-│   │   │   └── extract.ts
-│   │   ├── tests/
-│   │   └── package.json
-│   └── llm-providers/                # LLM API client wrappers
-│       ├── src/
-│       │   ├── openai.ts
-│       │   ├── anthropic.ts
-│       │   └── base.ts
-│       ├── tests/
-│       └── package.json
 ├── supabase/                         # NEW: Database migrations
 │   └── migrations/
 │       ├── 20250101000000_create_prompts_schema.sql
@@ -1205,27 +1276,46 @@ main-pal-app/
 └── README.md                         # Project documentation
 ```
 
-### Package.json Workspaces Configuration
+### Package.json Scripts
+
+Complete npm scripts available in `package.json`:
 
 ```json
 {
-  "name": "promptpal",
-  "version": "1.0.0",
-  "private": true,
-  "workspaces": [
-    "packages/*"
-  ],
   "scripts": {
-    "dev": "next dev --turbo",
-    "build": "next build",
-    "start": "next start",
-    "lint": "next lint",
-    "test": "playwright test",
-    "test:unit": "jest",
-    "db:migrate": "supabase db push",
-    "db:reset": "supabase db reset"
+    "dev": "next dev --turbopack",        // Start development server
+    "build": "next build",                // Build for production
+    "start": "next start",                // Start production server
+    "lint": "next lint",                  // Run ESLint
+    "lint:fix": "next lint --fix",        // Fix ESLint issues
+    "format": "prettier --write .",       // Format code with Prettier
+    "format:check": "prettier --check .", // Check code formatting
+    "type-check": "tsc --noEmit",         // Run TypeScript type checking
+    "clean": "rm -rf .next out dist",     // Clean build artifacts
+    "test": "playwright test",            // Run Playwright E2E tests
+    "test:ui": "playwright test --ui",    // Run tests in UI mode
+    "test:headed": "playwright test --headed",  // Run tests with browser visible
+    "db:migrate": "supabase db push",     // Push migrations to remote Supabase
+    "db:reset": "supabase db reset",      // Reset local DB and apply migrations
+    "db:types": "supabase gen types typescript --local > src/types/database.ts",  // Generate TypeScript types
+    "db:migration": "supabase migration new"  // Create new migration file
   }
 }
+```
+
+**Testing Commands:**
+```bash
+npm test              # Run all tests
+npm run test:ui       # Interactive test debugging
+npm run test:headed   # Watch tests run in browser
+```
+
+**Database Commands:** (requires Supabase CLI: `npm install -g supabase`)
+```bash
+npm run db:migration add_feature_name  # Create new migration
+npm run db:reset                       # Test migrations locally
+npm run db:types                       # Regenerate TypeScript types
+npm run db:migrate                     # Deploy to production
 ```
 
 ---
