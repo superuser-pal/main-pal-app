@@ -442,5 +442,243 @@ After completing this installation, you should have:
 - Linting and type checking passing
 - Test card payments working
 
-You now have a fully functional SaaS accelerator ready for customization and feature development!
+---
+
+## Phase 3: Production Deployment (PromptPal Security Setup)
+
+### 3.1 API Key Encryption Secret Setup
+
+PromptPal encrypts user LLM API keys (OpenAI, Anthropic) before storing them in the database. The encryption secret must be configured differently for development vs production.
+
+#### Development Environment
+
+1. **Generate encryption secret:**
+   ```bash
+   openssl rand -hex 32
+   ```
+
+2. **Add to `.env.local`:**
+   ```bash
+   echo "API_KEY_ENCRYPTION_SECRET=<paste-generated-hex-here>" >> .env.local
+   ```
+
+3. **Restart development server:**
+   ```bash
+   npm run dev
+   ```
+
+#### Production Environment (Supabase Vault)
+
+**Why Supabase Vault?** Provides encrypted storage for secrets with access control and audit logging, without adding new infrastructure.
+
+1. **Go to Supabase Dashboard** → Your Project → Database → Extensions
+
+2. **Enable Vault extension** (if not already enabled):
+   - Search for "vault" in extensions list
+   - Click "Enable" next to pgsodium and vault extensions
+
+3. **Open SQL Editor** and run:
+   ```sql
+   -- Step 1: Enable Vault (if not done via UI)
+   CREATE EXTENSION IF NOT EXISTS vault;
+
+   -- Step 2: Disable statement logging to prevent secret exposure in logs
+   ALTER SYSTEM SET log_statement = 'none';
+
+   -- Step 3: Generate and store encryption secret
+   -- Replace the second parameter with your generated hex from step 1
+   SELECT vault.create_secret(
+     'api_key_encryption_secret',
+     '<your-generated-hex-from-openssl-rand>'
+   );
+
+   -- Step 4: Verify secret is stored (should show encrypted value)
+   SELECT id, name, created_at FROM vault.secrets
+   WHERE name = 'api_key_encryption_secret';
+   ```
+
+4. **Update Vercel environment variables:**
+   - Go to Vercel Dashboard → Your Project → Settings → Environment Variables
+   - **Remove** `API_KEY_ENCRYPTION_SECRET` (if present) - production uses Vault instead
+   - **Keep** `SUPABASE_SECRET_KEY` - required for Vault access
+
+5. **Backup encryption secret** (disaster recovery):
+   - Store generated hex in team password manager (1Password, LastPass, etc.)
+   - Encrypt with team master password
+   - Require 2 admins to decrypt (split-knowledge principle)
+   - Label as "PromptPal Encryption Secret - DO NOT SHARE"
+
+#### Verification
+
+Test encryption/decryption in development:
+
+```typescript
+// Test in Node.js REPL or API route
+import { encryptApiKey, decryptApiKey } from '@/lib/encryption';
+
+const testKey = 'sk-test-1234567890';
+const encrypted = await encryptApiKey(testKey);
+console.log('Encrypted:', encrypted);
+
+const decrypted = await decryptApiKey(encrypted);
+console.log('Decrypted:', decrypted);
+console.log('Match:', testKey === decrypted); // Should be true
+```
+
+### 3.2 Browser Extension API Configuration
+
+The browser extension API provides read-only access to user prompt libraries. It requires:
+- JWT token authentication
+- CORS configuration for extension origins
+- Rate limiting (optional but recommended)
+- Enterprise subscription tier
+
+#### Enable Extension API Feature
+
+1. **Add extension feature to database** (run in Supabase SQL Editor):
+   ```sql
+   -- Add extension_api_access feature to Enterprise product
+   INSERT INTO features (product_id, feature_key, feature_value)
+   SELECT id, 'extension_api_access', 'true'::jsonb
+   FROM products WHERE name = 'Enterprise'
+   ON CONFLICT DO NOTHING;
+
+   -- Verify feature was added
+   SELECT p.name, f.feature_key, f.feature_value
+   FROM features f
+   JOIN products p ON f.product_id = p.id
+   WHERE f.feature_key = 'extension_api_access';
+   ```
+
+2. **CORS middleware** is automatically configured in `src/middleware.ts`
+   - Allows `chrome-extension://` and `moz-extension://` origins
+   - Blocks all other origins for `/api/extension/*` routes
+   - No additional configuration needed
+
+#### Set Up Rate Limiting (Optional, Recommended for Production)
+
+1. **Create Upstash Redis account:**
+   - Go to [https://upstash.com](https://upstash.com)
+   - Sign up with GitHub or email
+   - Free tier: 10,000 commands/day (sufficient for beta)
+
+2. **Create Redis database:**
+   - Click "Create Database"
+   - Select region closest to your Vercel deployment
+   - Choose "Global" for multi-region (or single region for free tier)
+   - Copy REST URL and token
+
+3. **Add to Vercel environment variables:**
+   ```
+   UPSTASH_REDIS_URL=https://your-redis-region.upstash.io
+   UPSTASH_REDIS_TOKEN=AaaaAA...
+   ```
+
+4. **Verify rate limiting works:**
+   ```bash
+   # Test with curl (should work first 30 times/hour, then rate limit)
+   curl -H "Authorization: Bearer <extension-token>" \
+        -H "X-API-Version: 1" \
+        https://your-app.vercel.app/api/v1/extension/prompts
+   ```
+
+#### Extension Token Issuance Flow
+
+**For users** (when extension is ready):
+
+1. User logs into web app
+2. Goes to Settings → Extension Integration
+3. Clicks "Generate Extension Token"
+4. Token displayed with copy button (valid 7 days)
+5. User pastes token into browser extension settings
+6. Extension uses token for all API requests
+
+**Token format** (Supabase JWT with custom claims):
+```json
+{
+  "sub": "user_id",
+  "app_metadata": {
+    "extension_access": true,
+    "extension_id": "uuid",
+    "extension_issued_at": "2025-01-07T12:00:00Z"
+  },
+  "exp": 1704715200  // 7 days
+}
+```
+
+### 3.3 Production Security Checklist
+
+Before deploying PromptPal to production, verify all security measures:
+
+#### Encryption & Secrets
+- [ ] `API_KEY_ENCRYPTION_SECRET` stored in Supabase Vault (not Vercel)
+- [ ] Supabase statement logging disabled (`ALTER SYSTEM SET log_statement = 'none'`)
+- [ ] Vault secret backup stored in password manager (2-admin access)
+- [ ] Development `.env.local` has separate encryption key (rotated quarterly)
+- [ ] Key rotation schedule documented (annually on Jan 1st)
+
+#### Extension API
+- [ ] Extension API feature gated to Enterprise tier in database
+- [ ] CORS middleware tested with actual browser extension
+- [ ] Rate limiting configured with Upstash Redis
+- [ ] Extension token generation UI implemented in settings page
+- [ ] Token expiry tested (7-day limit enforced)
+- [ ] API versioning header required (`X-API-Version: 1`)
+
+#### Database & Auth
+- [ ] Supabase RLS policies enabled on all PromptPal tables
+- [ ] User API keys table has proper access controls
+- [ ] Extension audit logging enabled
+- [ ] Subscription tier checks integrated with extension API
+
+#### Monitoring & Alerts
+- [ ] Upstash Redis monitoring enabled (if using rate limiting)
+- [ ] Supabase logs monitored for Vault access
+- [ ] Alert on >100 extension requests/hour from single user
+- [ ] Weekly security report for admin review
+
+#### Documentation & Compliance
+- [ ] Privacy policy updated to mention extension data sync
+- [ ] Terms of service updated for Enterprise tier features
+- [ ] API key encryption strategy documented for team
+- [ ] Incident response plan created for key compromise
+
+### 3.4 Migration Workflow for PromptPal Schema
+
+Once security is configured, you're ready to deploy the PromptPal database schema:
+
+1. **Review migration files** in `supabase/migrations/`
+   - Should include `*_create_prompts_schema.sql` (from Story 1.1)
+   - Verify all 7 tables: prompts, folders, modules, module_options, variables, prompt_variables, encrypted_api_keys
+
+2. **Test locally first:**
+   ```bash
+   # Reset local database with migrations
+   supabase db reset
+
+   # Verify all tables created
+   supabase db diff
+   ```
+
+3. **Deploy to production:**
+   ```bash
+   # Link to production project
+   supabase link --project-ref <prod-project-ref>
+
+   # Push migrations
+   supabase db push
+
+   # Generate TypeScript types
+   npm run db:types
+   ```
+
+4. **Verify in Supabase Dashboard:**
+   - Check all tables exist
+   - Verify RLS policies active
+   - Test sample data insertion
+   - Confirm indexes created
+
+---
+
+You now have a fully functional SaaS accelerator with PromptPal security infrastructure ready for feature development!
 

@@ -943,6 +943,416 @@ graph TB
 
 ---
 
+## Browser Extension Security Model
+
+### Overview
+
+The browser extension API (`/api/extension/*`) provides **read-only access** to user prompt libraries for in-context prompt execution. All endpoints require JWT authentication and are subject to rate limiting based on subscription tier. Extension API access is gated to **Enterprise tier only** during beta phase.
+
+**Security Principles:**
+- **Zero Trust**: Every request authenticated and authorized
+- **Least Privilege**: Extension has read-only access, cannot modify prompts
+- **Defense in Depth**: CORS, rate limiting, token expiry, and subscription checks
+- **Auditability**: All extension API calls logged for security monitoring
+
+### Token Issuance and Lifecycle
+
+**Token Generation Flow:**
+
+1. **User Initiates**: User clicks "Generate Extension Token" in web app settings page
+2. **Token Creation**: Server generates Supabase JWT with custom claims:
+   ```json
+   {
+     "sub": "user_id",
+     "aud": "authenticated",
+     "role": "authenticated",
+     "app_metadata": {
+       "extension_access": true,
+       "extension_id": "uuid-v4",
+       "extension_issued_at": "2025-01-07T12:00:00Z"
+     },
+     "exp": 1704715200  // 7 days from issuance
+   }
+   ```
+3. **User Copies Token**: Web app displays token with copy-to-clipboard button
+4. **Extension Storage**: Extension stores token in `browser.storage.local` (browser-encrypted)
+5. **Request Authentication**: Extension passes token in `Authorization: Bearer <token>` header
+
+**Token Validation in API Routes:**
+
+```typescript
+// src/app/api/extension/[endpoint]/route.ts
+import { createClient } from '@supabase/supabase-js';
+
+export async function GET(request: Request) {
+  // Extract token from Authorization header
+  const authHeader = request.headers.get('authorization');
+  if (!authHeader?.startsWith('Bearer ')) {
+    return NextResponse.json({ error: 'UNAUTHORIZED' }, { status: 401 });
+  }
+
+  const token = authHeader.substring(7);
+
+  // Validate token with Supabase
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!
+  );
+
+  const { data: { user }, error } = await supabase.auth.getUser(token);
+
+  if (error || !user) {
+    return NextResponse.json({ error: 'INVALID_TOKEN' }, { status: 401 });
+  }
+
+  // Check extension access permission
+  if (!user.app_metadata?.extension_access) {
+    return NextResponse.json({ error: 'EXTENSION_ACCESS_DENIED' }, { status: 403 });
+  }
+
+  // Verify Enterprise subscription (feature gate)
+  const hasAccess = await hasFeatureAccess(user.id, 'extension_api_access');
+  if (!hasAccess) {
+    return NextResponse.json({ error: 'UPGRADE_REQUIRED' }, { status: 402 });
+  }
+
+  // Proceed with request processing...
+}
+```
+
+**Token Refresh Strategy:**
+
+- **No Automatic Refresh**: Tokens expire after 7 days, user must regenerate manually
+- **Rationale**: Security-by-inconvenience for beta phase, prevents long-lived compromised tokens
+- **Future Enhancement**: Implement refresh token mechanism for production (30-day access + refresh)
+
+**Token Revocation:**
+
+```typescript
+// POST /api/extension/revoke
+// User-initiated revocation from web app settings
+export async function POST(request: Request) {
+  const { userId } = await requireAuth(request);
+
+  // Clear extension_access flag in user metadata
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SECRET_KEY!  // Service role key
+  );
+
+  await supabase.auth.admin.updateUserById(userId, {
+    app_metadata: {
+      extension_access: false,
+      extension_revoked_at: new Date().toISOString()
+    }
+  });
+
+  return NextResponse.json({ success: true });
+}
+```
+
+### CORS Configuration
+
+**Middleware Extension** (`src/middleware.ts`):
+
+```typescript
+// Add after line 43 (within existing middleware function)
+if (pathname.startsWith('/api/extension/')) {
+  // Get request origin
+  const origin = request.headers.get('origin');
+
+  // Allow Chrome and Firefox extension origins
+  if (origin?.startsWith('chrome-extension://') || origin?.startsWith('moz-extension://')) {
+    response.headers.set('Access-Control-Allow-Origin', origin);
+    response.headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    response.headers.set('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-API-Version');
+    response.headers.set('Access-Control-Allow-Credentials', 'false');
+    response.headers.set('Access-Control-Max-Age', '86400'); // 24 hours
+  } else {
+    // Reject non-extension origins
+    return new Response('CORS policy: Extension API only accessible from browser extensions', {
+      status: 403
+    });
+  }
+
+  // Handle preflight OPTIONS request
+  if (request.method === 'OPTIONS') {
+    return new Response(null, {
+      status: 204,
+      headers: response.headers
+    });
+  }
+}
+```
+
+**Allowed Origins:**
+- `chrome-extension://*` - Chrome/Edge extensions
+- `moz-extension://*` - Firefox extensions
+- **NOT allowed**: `http://localhost`, web apps, or third-party sites
+
+**Security Headers:**
+- `Access-Control-Allow-Credentials: false` - No cookies/credentials sent
+- `Access-Control-Max-Age: 86400` - Cache preflight for 24 hours
+- `X-API-Version` header required for API versioning
+
+### Rate Limiting Strategy
+
+**Rate Limits by Subscription Tier:**
+
+| Endpoint | Free | Pro | Enterprise |
+|----------|------|-----|------------|
+| `GET /api/extension/prompts` (full sync) | N/A | N/A | 30 / hour |
+| `GET /api/extension/prompts/sync` (incremental) | N/A | N/A | 100 / hour |
+| `POST /api/extension/usage` (analytics) | N/A | N/A | 500 / hour |
+| `GET /api/extension/folders` | N/A | N/A | 50 / hour |
+
+**Note**: Extension API is Enterprise-only during beta phase (Free/Pro tiers blocked)
+
+**Implementation** (`src/lib/extension-ratelimit.ts`):
+
+```typescript
+import { Ratelimit } from '@upstash/ratelimit';
+import { Redis } from '@upstash/redis';
+
+// Initialize Redis client (Upstash)
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_URL!,
+  token: process.env.UPSTASH_REDIS_TOKEN!,
+});
+
+/**
+ * Rate limiter for extension API endpoints
+ * Uses sliding window algorithm for smooth rate limiting
+ */
+export const extensionRatelimit = new Ratelimit({
+  redis,
+  limiter: Ratelimit.slidingWindow(30, '1 h'), // Default: 30 requests/hour
+  analytics: true,
+  prefix: 'extension_api',
+});
+
+/**
+ * Get rate limit for specific endpoint and user tier
+ */
+export function getRateLimitForEndpoint(
+  endpoint: string,
+  tier: 'free' | 'pro' | 'enterprise'
+): Ratelimit {
+  // Extension API is Enterprise-only
+  if (tier !== 'enterprise') {
+    return new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(0, '1 h'), // Block all requests
+      prefix: 'extension_api_blocked',
+    });
+  }
+
+  // Endpoint-specific limits
+  const limits: Record<string, { requests: number; window: string }> = {
+    '/api/extension/prompts': { requests: 30, window: '1 h' },
+    '/api/extension/prompts/sync': { requests: 100, window: '1 h' },
+    '/api/extension/usage': { requests: 500, window: '1 h' },
+    '/api/extension/folders': { requests: 50, window: '1 h' },
+  };
+
+  const limit = limits[endpoint] || { requests: 30, window: '1 h' };
+
+  return new Ratelimit({
+    redis,
+    limiter: Ratelimit.slidingWindow(limit.requests, limit.window),
+    analytics: true,
+    prefix: `extension_api:${endpoint}`,
+  });
+}
+
+/**
+ * Check rate limit in API route
+ */
+export async function checkRateLimit(
+  userId: string,
+  endpoint: string,
+  tier: 'free' | 'pro' | 'enterprise'
+): Promise<{ success: boolean; limit: number; remaining: number; reset: number }> {
+  const ratelimiter = getRateLimitForEndpoint(endpoint, tier);
+  const identifier = `${userId}:${endpoint}`;
+
+  const { success, limit, remaining, reset } = await ratelimiter.limit(identifier);
+
+  return { success, limit, remaining, reset };
+}
+```
+
+**Rate Limit Response Headers:**
+
+```typescript
+// Add to all extension API responses
+response.headers.set('X-RateLimit-Limit', limit.toString());
+response.headers.set('X-RateLimit-Remaining', remaining.toString());
+response.headers.set('X-RateLimit-Reset', reset.toString());
+
+if (!success) {
+  return NextResponse.json(
+    {
+      error: 'RATE_LIMIT_EXCEEDED',
+      message: `Rate limit exceeded. Try again in ${Math.ceil((reset - Date.now()) / 1000)} seconds.`
+    },
+    {
+      status: 429,
+      headers: response.headers
+    }
+  );
+}
+```
+
+### Security Boundaries and Permissions
+
+**What Extension CAN Do:**
+- ✅ Read user's prompts (full and incremental sync)
+- ✅ Read user's folders (organization structure)
+- ✅ Read prompt modules and variables (for preview)
+- ✅ Track usage analytics (which prompts executed)
+- ✅ Access public metadata (prompt names, descriptions)
+
+**What Extension CANNOT Do:**
+- ❌ Create, update, or delete prompts
+- ❌ Access encrypted API keys (LLM provider keys)
+- ❌ Execute prompts server-side (extension handles LLM calls client-side)
+- ❌ Access other users' prompts (scoped to authenticated user)
+- ❌ Modify subscription or billing information
+- ❌ Access web app features (limited to extension-specific endpoints)
+
+**Permission Enforcement:**
+
+```typescript
+// Scope validation in API routes
+const EXTENSION_ALLOWED_ACTIONS = ['read:prompts', 'read:folders', 'write:usage'];
+
+function validateExtensionScope(action: string): boolean {
+  return EXTENSION_ALLOWED_ACTIONS.includes(action);
+}
+
+// Example usage
+if (!validateExtensionScope('delete:prompts')) {
+  return NextResponse.json({ error: 'FORBIDDEN' }, { status: 403 });
+}
+```
+
+### API Versioning
+
+**Versioning Strategy:**
+- All extension endpoints use `/api/v1/extension/*` prefix
+- Version in URL path for future compatibility
+- `X-API-Version` header required (validates client version)
+
+**Version Header Validation:**
+
+```typescript
+// Check API version header
+const apiVersion = request.headers.get('X-API-Version');
+if (apiVersion !== '1') {
+  return NextResponse.json(
+    {
+      error: 'UNSUPPORTED_API_VERSION',
+      message: 'Please update your extension to the latest version.'
+    },
+    { status: 426 } // Upgrade Required
+  );
+}
+```
+
+**Future Versions:**
+- **v2**: May add write access for prompt updates (with conflict resolution)
+- **v3**: May add real-time WebSocket sync
+- Older versions deprecated with 6-month notice period
+
+### Extension Endpoints
+
+**Core Endpoints:**
+
+| Endpoint | Method | Description | Rate Limit |
+|----------|--------|-------------|------------|
+| `/api/v1/extension/auth` | POST | Issue extension token | 5 / hour |
+| `/api/v1/extension/prompts` | GET | Full library sync | 30 / hour |
+| `/api/v1/extension/prompts/sync` | GET | Incremental sync (since timestamp) | 100 / hour |
+| `/api/v1/extension/folders` | GET | Folder structure | 50 / hour |
+| `/api/v1/extension/usage` | POST | Log prompt execution | 500 / hour |
+| `/api/v1/extension/revoke` | POST | Revoke extension token | Unlimited |
+
+**Response Format:**
+
+```typescript
+// Success response
+{
+  "data": { /* payload */ },
+  "meta": {
+    "timestamp": "2025-01-07T12:00:00Z",
+    "version": "1",
+    "rate_limit": {
+      "limit": 30,
+      "remaining": 28,
+      "reset": 1704715200
+    }
+  }
+}
+
+// Error response
+{
+  "error": "ERROR_CODE",
+  "message": "Human-readable error message",
+  "meta": {
+    "timestamp": "2025-01-07T12:00:00Z",
+    "version": "1"
+  }
+}
+```
+
+### Monitoring and Logging
+
+**Security Audit Log:**
+
+```typescript
+// Log all extension API requests
+interface ExtensionAuditLog {
+  user_id: string;
+  extension_id: string;
+  endpoint: string;
+  method: string;
+  ip_address: string;
+  user_agent: string;
+  timestamp: string;
+  status_code: number;
+  rate_limit_exceeded: boolean;
+}
+
+// Store in database for security analysis
+async function logExtensionRequest(log: ExtensionAuditLog) {
+  await supabase.from('extension_audit_logs').insert(log);
+}
+```
+
+**Anomaly Detection:**
+- Alert on >100 requests/hour from single user (potential abuse)
+- Alert on multiple failed authentication attempts
+- Alert on access from unexpected IP ranges
+- Weekly security report for admin review
+
+### Security Checklist
+
+Before launching extension API:
+
+- [ ] CORS configured to only allow extension origins
+- [ ] Rate limiting enabled with Upstash Redis
+- [ ] Extension feature gated to Enterprise tier
+- [ ] JWT token validation implemented
+- [ ] API versioning enforced
+- [ ] Audit logging enabled
+- [ ] Security monitoring alerts configured
+- [ ] Extension code reviewed for security vulnerabilities
+- [ ] Penetration testing completed
+- [ ] Privacy policy updated to mention extension data sync
+
+---
+
 ## Database Schema
 
 Complete PostgreSQL schema for PromptPal (extends existing Supabase schema).
@@ -1180,6 +1590,331 @@ supabase db push
 - `YYYYMMDDHHMMSS_add_folders_table.sql` - Add new table
 - `YYYYMMDDHHMMSS_add_prompt_search_index.sql` - Performance optimization
 - `YYYYMMDDHHMMSS_update_rls_policies.sql` - Security updates
+
+---
+
+## API Key Encryption Strategy
+
+### Overview
+
+User API keys for LLM providers (OpenAI, Anthropic) are encrypted using **AES-256-GCM** before storage in the `encrypted_api_keys` table. The encryption secret is stored separately using **Supabase Vault** for production environments, ensuring defense-in-depth security.
+
+**Security Goals:**
+- **Confidentiality**: API keys encrypted at rest in database
+- **Key Separation**: Encryption secret stored separately from encrypted data
+- **Auditability**: All key operations logged for security monitoring
+- **Recoverability**: Encrypted backup of encryption secret for disaster recovery
+
+### Production Secret Storage
+
+**Development Environment:**
+- `API_KEY_ENCRYPTION_SECRET` stored in `.env.local`
+- Generate with: `openssl rand -hex 32` (produces 256-bit key)
+- Shared among development team via secure channel (1Password, etc.)
+- Rotated quarterly
+
+**Staging/Production Environments:**
+- Encryption secret stored in **Supabase Vault**
+- Vault provides automatic encryption at rest
+- Access controlled via Supabase RLS policies
+- Accessed via service role key in API routes
+
+**Supabase Vault Setup:**
+
+```sql
+-- Initial setup (run once in Supabase Dashboard SQL Editor)
+-- Step 1: Enable Vault extension
+CREATE EXTENSION IF NOT EXISTS vault;
+
+-- Step 2: Disable statement logging to prevent secret exposure in logs
+ALTER SYSTEM SET log_statement = 'none';
+
+-- Step 3: Store encryption secret (replace with actual generated key)
+SELECT vault.create_secret(
+  'api_key_encryption_secret',
+  'your-hex-encoded-key-from-openssl-rand'
+);
+
+-- Step 4: Verify secret is stored (will show encrypted value)
+SELECT id, name, created_at FROM vault.secrets
+WHERE name = 'api_key_encryption_secret';
+```
+
+**Accessing Vault Secret in Code:**
+
+```typescript
+// Production only - fetch from Supabase Vault
+import { createClient } from '@supabase/supabase-js';
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SECRET_KEY! // Service role key required
+);
+
+const { data, error } = await supabase
+  .from('vault.decrypted_secrets')
+  .select('decrypted_secret')
+  .eq('name', 'api_key_encryption_secret')
+  .single();
+
+if (error) throw new Error('Failed to retrieve encryption key');
+const encryptionKey = Buffer.from(data.decrypted_secret, 'hex');
+```
+
+### Key Rotation Protocol
+
+**Rotation Schedule:**
+- **Regular**: Annually on January 1st
+- **Incident-Triggered**: Immediately upon suspected compromise
+- **Team Change**: When admins with Vault access leave organization
+
+**Rotation Procedure:**
+
+1. **Generate New Key:**
+   ```bash
+   openssl rand -hex 32 > new_encryption_key.txt
+   ```
+
+2. **Store Versioned Key in Vault:**
+   ```sql
+   SELECT vault.create_secret(
+     'api_key_encryption_secret_v2',
+     'new-hex-encoded-key'
+   );
+   ```
+
+3. **Update Decryption Logic** (graceful migration):
+   ```typescript
+   async function decryptApiKey(ciphertext: string): Promise<string> {
+     // Try new key first
+     try {
+       const newKey = await getEncryptionKey('api_key_encryption_secret_v2');
+       return decrypt(ciphertext, newKey);
+     } catch {
+       // Fall back to old key during transition period
+       const oldKey = await getEncryptionKey('api_key_encryption_secret');
+       return decrypt(ciphertext, oldKey);
+     }
+   }
+   ```
+
+4. **Background Re-encryption Job:**
+   ```typescript
+   // Run as one-time migration script
+   async function reencryptAllKeys() {
+     const oldKey = await getEncryptionKey('api_key_encryption_secret');
+     const newKey = await getEncryptionKey('api_key_encryption_secret_v2');
+
+     const { data: encryptedKeys } = await supabase
+       .from('encrypted_api_keys')
+       .select('*');
+
+     for (const record of encryptedKeys) {
+       const plaintext = decrypt(record.encrypted_key, oldKey);
+       const newCiphertext = encrypt(plaintext, newKey);
+
+       await supabase
+         .from('encrypted_api_keys')
+         .update({
+           encrypted_key: newCiphertext,
+           key_version: 'v2'
+         })
+         .eq('id', record.id);
+     }
+   }
+   ```
+
+5. **Remove Old Key After Transition:**
+   ```sql
+   -- After 30-day transition period and verification
+   SELECT vault.delete_secret('api_key_encryption_secret');
+
+   -- Rename new key to canonical name
+   -- (Note: Vault doesn't support rename, so update application to use v2)
+   ```
+
+**Transition Period:** 30 days to allow dual-key decryption and gradual re-encryption
+
+### Access Control and Recovery
+
+**Access Control:**
+- **Development**: All team members have access via `.env.local`
+- **Staging/Production**: Database admins only via Supabase Dashboard
+- **API Routes**: Service role key access (controlled via Vercel environment variables)
+- **Audit**: All Vault secret access logged in Supabase logs
+
+**Recovery Procedures:**
+
+**Scenario 1: Encryption Key Lost**
+1. Retrieve encrypted backup from password manager (2 admins required for unlock)
+2. Restore to Supabase Vault
+3. Verify API key decryption works with test key
+4. Investigate loss and implement preventive measures
+
+**Scenario 2: Encryption Key Compromised**
+1. Immediately rotate encryption key (follow protocol above)
+2. Audit all API key access logs for suspicious activity
+3. Notify users to rotate their LLM provider API keys
+4. Generate incident report and update procedures
+
+**Backup Strategy:**
+- Encryption secret backed up to team password manager (1Password/LastPass)
+- Backup encrypted with team master password
+- Requires 2 admins to decrypt (split-knowledge principle)
+- Backup updated immediately after rotation
+
+### Encryption Implementation
+
+**File:** `src/lib/encryption.ts`
+
+```typescript
+import crypto from 'crypto';
+import { createClient } from '@supabase/supabase-js';
+
+const ALGORITHM = 'aes-256-gcm';
+const IV_LENGTH = 16;
+const AUTH_TAG_LENGTH = 16;
+const KEY_LENGTH = 32; // 256 bits
+
+/**
+ * Get encryption key from environment or Supabase Vault
+ */
+async function getEncryptionKey(version: string = 'api_key_encryption_secret'): Promise<Buffer> {
+  // Development: use environment variable
+  if (process.env.NODE_ENV === 'development') {
+    const envKey = process.env.API_KEY_ENCRYPTION_SECRET;
+    if (!envKey) {
+      throw new Error('API_KEY_ENCRYPTION_SECRET not set in environment');
+    }
+    return Buffer.from(envKey, 'hex');
+  }
+
+  // Production: fetch from Supabase Vault
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SECRET_KEY! // Service role key
+  );
+
+  const { data, error } = await supabase
+    .from('vault.decrypted_secrets')
+    .select('decrypted_secret')
+    .eq('name', version)
+    .single();
+
+  if (error) {
+    throw new Error(`Failed to retrieve encryption key: ${error.message}`);
+  }
+
+  return Buffer.from(data.decrypted_secret, 'hex');
+}
+
+/**
+ * Encrypt API key using AES-256-GCM
+ * @param plaintext - API key in plain text
+ * @returns Base64-encoded ciphertext with IV and auth tag
+ */
+export async function encryptApiKey(plaintext: string): Promise<string> {
+  const key = await getEncryptionKey();
+
+  // Generate random IV for this encryption
+  const iv = crypto.randomBytes(IV_LENGTH);
+
+  // Create cipher
+  const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
+
+  // Encrypt plaintext
+  const encrypted = Buffer.concat([
+    cipher.update(plaintext, 'utf8'),
+    cipher.final()
+  ]);
+
+  // Get authentication tag (GCM mode)
+  const authTag = cipher.getAuthTag();
+
+  // Combine: IV + authTag + encrypted
+  const combined = Buffer.concat([iv, authTag, encrypted]);
+
+  // Return base64-encoded
+  return combined.toString('base64');
+}
+
+/**
+ * Decrypt API key using AES-256-GCM
+ * @param ciphertext - Base64-encoded ciphertext with IV and auth tag
+ * @returns Decrypted API key in plain text
+ */
+export async function decryptApiKey(ciphertext: string): Promise<string> {
+  // Try current key first, then fall back to previous versions
+  const versions = ['api_key_encryption_secret', 'api_key_encryption_secret_v2'];
+
+  for (const version of versions) {
+    try {
+      const key = await getEncryptionKey(version);
+      return await decryptWithKey(ciphertext, key);
+    } catch (error) {
+      // Try next version
+      if (version === versions[versions.length - 1]) {
+        throw error; // Last version failed, re-throw
+      }
+    }
+  }
+
+  throw new Error('Failed to decrypt with any key version');
+}
+
+/**
+ * Decrypt with specific key (internal helper)
+ */
+async function decryptWithKey(ciphertext: string, key: Buffer): Promise<string> {
+  // Decode base64
+  const combined = Buffer.from(ciphertext, 'base64');
+
+  // Extract components
+  const iv = combined.subarray(0, IV_LENGTH);
+  const authTag = combined.subarray(IV_LENGTH, IV_LENGTH + AUTH_TAG_LENGTH);
+  const encrypted = combined.subarray(IV_LENGTH + AUTH_TAG_LENGTH);
+
+  // Create decipher
+  const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
+  decipher.setAuthTag(authTag);
+
+  // Decrypt
+  const decrypted = Buffer.concat([
+    decipher.update(encrypted),
+    decipher.final()
+  ]);
+
+  return decrypted.toString('utf8');
+}
+```
+
+### Security Considerations
+
+**Why AES-256-GCM?**
+- **AES-256**: Industry-standard symmetric encryption (256-bit key)
+- **GCM Mode**: Provides both confidentiality and authenticity
+- **Authentication Tag**: Prevents tampering with ciphertext
+- **NIST Approved**: Recommended by NIST SP 800-38D
+
+**Why Supabase Vault?**
+- **No New Infrastructure**: Leverages existing Supabase deployment
+- **Encrypted at Rest**: Vault secrets automatically encrypted by Supabase
+- **Access Control**: Controlled via Supabase RLS and service role key
+- **Audit Trail**: All access logged in Supabase logs
+- **Cost**: No additional cost for Vault usage
+
+**Security Boundaries:**
+- ✅ Encryption secret never exposed to client (server-side only)
+- ✅ API keys never logged in plain text
+- ✅ Encrypted keys useless without encryption secret
+- ✅ Authentication tag prevents tampering
+- ❌ Does not protect against compromised server (access to Vault = access to keys)
+- ❌ Does not prevent malicious admin from decrypting keys
+
+**Future Enhancements:**
+- **User-Controlled Encryption**: Allow users to provide their own encryption passphrase
+- **Hardware Security Module (HSM)**: Use AWS CloudHSM for encryption key storage (Enterprise tier)
+- **Key Derivation**: Derive user-specific keys from master secret for additional isolation
 
 ### Existing Tables (Retain)
 - `auth.users` - Supabase Auth users

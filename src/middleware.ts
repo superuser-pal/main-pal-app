@@ -43,6 +43,39 @@ export async function middleware(request: NextRequest) {
 
   const { pathname } = request.nextUrl
 
+  // Extension API CORS handling
+  // Allows browser extensions to access /api/extension/* endpoints
+  if (pathname.startsWith('/api/extension/') || pathname.startsWith('/api/v1/extension/')) {
+    const origin = request.headers.get('origin')
+
+    // Only allow requests from browser extensions
+    if (origin?.startsWith('chrome-extension://') || origin?.startsWith('moz-extension://')) {
+      // Set CORS headers for extension origins
+      response.headers.set('Access-Control-Allow-Origin', origin)
+      response.headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+      response.headers.set(
+        'Access-Control-Allow-Headers',
+        'Authorization, Content-Type, X-API-Version'
+      )
+      response.headers.set('Access-Control-Allow-Credentials', 'false')
+      response.headers.set('Access-Control-Max-Age', '86400') // 24 hours
+
+      // Handle preflight OPTIONS request
+      if (request.method === 'OPTIONS') {
+        return new NextResponse(null, {
+          status: 204,
+          headers: response.headers,
+        })
+      }
+    } else {
+      // Reject non-extension origins
+      return new NextResponse(
+        'CORS policy: Extension API only accessible from browser extensions',
+        { status: 403 }
+      )
+    }
+  }
+
   // Protected routes
   const protectedRoutes = ['/dashboard', '/settings', '/profile']
   const isProtectedRoute = protectedRoutes.some(route => 
