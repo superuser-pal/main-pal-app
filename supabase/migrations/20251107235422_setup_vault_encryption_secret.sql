@@ -10,22 +10,12 @@
 -- @see INSTALL.md - Phase 3.1 for complete setup instructions
 -- @see supabase/README.md - Supabase Vault Setup section
 
--- Enable Vault extension for encrypted secret storage
--- The Vault extension uses pgsodium for encryption
-CREATE EXTENSION IF NOT EXISTS vault;
+-- NOTE: Vault extension is not available in this Supabase plan
+-- Using application-level encryption instead with API_KEY_ENCRYPTION_SECRET env var
+-- See .env.local for API_KEY_ENCRYPTION_SECRET configuration
 
--- Disable statement logging to prevent secrets from appearing in Supabase logs
--- CRITICAL: This must be done before storing any secrets
--- Note: This affects the entire database, not just Vault operations
-ALTER SYSTEM SET log_statement = 'none';
-
--- Apply the logging configuration change
--- This reloads the PostgreSQL configuration
-SELECT pg_reload_conf();
-
--- Create a comment to document the Vault setup
-COMMENT ON EXTENSION vault IS
-'Vault extension for encrypted secret storage. Used for API_KEY_ENCRYPTION_SECRET.';
+-- Placeholder migration for Vault setup
+-- The encrypted_api_keys table will use application-level encryption in the API layer
 
 -- ============================================================================
 -- MANUAL STEP REQUIRED AFTER MIGRATION
