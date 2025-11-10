@@ -5,9 +5,9 @@
 **Date**: 2025-??-??
 
 ## Findings
-- docs/architecture.md:95-117 assumes adoption of npm workspaces with `packages/*`, but the current repository is a single Next.js app without workspace tooling (`package.json:5-15`), creating a structural mismatch without a migration plan. ADDRESSED
-- docs/architecture.md:1210-1226 references Jest, Supabase CLI, and Playwright scripts that aren’t defined today (`package.json:5-15,43-53`), so following the documented workflow will fail until the tooling or docs are aligned. ADDRESED 
-- docs/architecture.md:108-115 and 1184-1205 expect a committed `supabase/migrations` directory, yet none exists; the large schema spec in docs/architecture.md:924-1073 needs concrete generation/versioning steps to prevent schema drift. ADDRESSED
+- docs/architecture.md:95-117 assumes adoption of npm workspaces with `packages/*`, but the current repository is a single Next.js app without workspace tooling (`package.json:5-15`), creating a structural mismatch without a migration plan.
+- docs/architecture.md:1210-1226 references Jest, Supabase CLI, and Playwright scripts that aren’t defined today (`package.json:5-15,43-53`), so following the documented workflow will fail until the tooling or docs are aligned.
+- docs/architecture.md:108-115 and 1184-1205 expect a committed `supabase/migrations` directory, yet none exists; the large schema spec in docs/architecture.md:924-1073 needs concrete generation/versioning steps to prevent schema drift.
 - docs/architecture.md:1265-1272 adds `API_KEY_ENCRYPTION_SECRET` to `.env.local` but lacks guidance for production storage, rotation, or ownership, leaving the encryption story incomplete.
 - docs/architecture.md:679-864 outlines browser-extension endpoints without specifying token issuance, refresh, or CORS strategy, leaving the extension security model underdefined.
 

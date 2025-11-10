@@ -137,6 +137,8 @@ jspm_packages/
 # Temporary folders
 tmp/
 temp/
+.temp/
+*/.temp/
 
 # Database files
 *.db
@@ -167,3 +169,6 @@ storybook-static
 # BMAD (local only)
 .bmad-core/
 .bmad-*/
+
+# Development/Demo pages (optional - uncomment to ignore)
+# src/app/_dev/
