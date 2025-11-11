@@ -5,7 +5,7 @@ import { ThemeProvider } from "@/components/common/theme-provider";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { NavigationProvider } from "@/contexts/NavigationContext";
 import { Header } from "@/components/layout/header";
-import { Footer } from "@/components/layout/footer";
+import { ConditionalFooter } from "@/components/layout/ConditionalFooter";
 import { APP_CONFIG } from "@/lib/constants";
 
 const geistSans = Geist({
@@ -75,7 +75,7 @@ export default function RootLayout({
               <div className="relative flex min-h-screen flex-col">
                 <Header />
                 <main className="flex-1">{children}</main>
-                <Footer />
+                <ConditionalFooter />
               </div>
             </NavigationProvider>
           </AuthProvider>

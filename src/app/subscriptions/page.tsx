@@ -2,11 +2,13 @@
 
 import { useState, useEffect, Suspense } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams, usePathname } from 'next/navigation';
+import { MainLayout } from '@/components/layout/MainLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Check, Loader2 } from 'lucide-react';
+import { NAVIGATION_REGISTRY } from '@/lib/navigation-registry';
 
 interface Plan {
   id: string;
@@ -36,6 +38,8 @@ interface CurrentSubscription {
 function SubscriptionsContent() {
   const { user, loading: authLoading } = useAuth();
   const router = useRouter();
+  const pathname = usePathname();
+  const navigationConfig = NAVIGATION_REGISTRY[pathname];
   const searchParams = useSearchParams();
   const [plans, setPlans] = useState<Plan[]>([]);
   const [currentSubscription, setCurrentSubscription] = useState<CurrentSubscription | null>(null);
@@ -231,16 +235,16 @@ function SubscriptionsContent() {
 
   if (authLoading || loading) {
     return (
-      <div className="container mx-auto px-4 py-8">
+      <MainLayout config={navigationConfig} pathname={pathname}>
         <div className="flex justify-center items-center min-h-[400px]">
           <Loader2 className="h-8 w-8 animate-spin" />
         </div>
-      </div>
+      </MainLayout>
     );
   }
 
   return (
-    <div className="container mx-auto px-4 py-8">
+    <MainLayout config={navigationConfig} pathname={pathname}>
       <div className="space-y-6">
         {/* Header */}
         <div className="text-center">
@@ -361,7 +365,7 @@ function SubscriptionsContent() {
           </div>
         )}
       </div>
-    </div>
+    </MainLayout>
   );
 }
 
