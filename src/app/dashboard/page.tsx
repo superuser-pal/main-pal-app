@@ -1,21 +1,33 @@
-import ProtectedRoute from '@/components/auth/ProtectedRoute'
-import { getUser } from '@/lib/auth/server'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { LogoutButton } from '@/components/auth/LogoutButton'
+'use client';
 
-export default async function DashboardPage() {
+import { usePathname } from 'next/navigation';
+import { useAuth } from '@/contexts/AuthContext';
+import { MainLayout } from '@/components/layout/MainLayout';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { LogoutButton } from '@/components/auth/LogoutButton';
+import { NAVIGATION_REGISTRY } from '@/lib/navigation-registry';
+
+export default function DashboardPage() {
+  const pathname = usePathname();
+  const { user, loading } = useAuth();
+  const navigationConfig = NAVIGATION_REGISTRY[pathname];
+
+  if (loading) {
+    return (
+      <MainLayout config={navigationConfig} pathname={pathname}>
+        <div className="flex items-center justify-center h-64">
+          <div className="text-muted-foreground">Loading...</div>
+        </div>
+      </MainLayout>
+    );
+  }
+
+  if (!user) {
+    return null; // Middleware will redirect
+  }
+
   return (
-    <ProtectedRoute>
-      <DashboardContent />
-    </ProtectedRoute>
-  )
-}
-
-async function DashboardContent() {
-  const user = await getUser()
-
-  return (
-    <div className="container mx-auto px-4 py-8">
+    <MainLayout config={navigationConfig} pathname={pathname}>
       <div className="space-y-6">
         <div>
           <h1 className="text-3xl font-bold">Dashboard</h1>
@@ -68,6 +80,6 @@ async function DashboardContent() {
           </Card>
         </div>
       </div>
-    </div>
-  )
+    </MainLayout>
+  );
 }

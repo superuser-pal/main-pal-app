@@ -3,7 +3,31 @@ import { NavigationConfig } from '@/types/navigation';
 // Static registry of all navigation pages
 // This approach avoids Next.js TypeScript conflicts with page exports
 export const NAVIGATION_REGISTRY: Record<string, NavigationConfig> = {
-  '/testnav': {
+  '/dashboard': {
+    title: 'Dashboard',
+    sidebar: {
+      enabled: true,
+      section: 'Dashboard',
+      icon: 'Home',
+    },
+    breadcrumb: {
+      path: ['Dashboard'],
+    },
+  },
+
+  '/subscriptions': {
+    title: 'Subscriptions',
+    sidebar: {
+      enabled: true,
+      section: 'Subscriptions',
+      icon: 'Settings',
+    },
+    breadcrumb: {
+      path: ['Subscriptions'],
+    },
+  },
+
+  '/dev/testnav': {
     title: 'Test Navigation',
     sidebar: {
       enabled: true,
@@ -15,7 +39,7 @@ export const NAVIGATION_REGISTRY: Record<string, NavigationConfig> = {
     },
   },
   
-  '/testnav/analytics': {
+  '/dev/testnav/analytics': {
     title: 'Analytics Overview',
     sidebar: {
       enabled: true,
@@ -26,8 +50,8 @@ export const NAVIGATION_REGISTRY: Record<string, NavigationConfig> = {
       path: ['TestNav', 'Analytics'],
     },
   },
-  
-  '/testnav/analytics/reports': {
+
+  '/dev/testnav/analytics/reports': {
     title: 'Analytics Reports',
     sidebar: {
       enabled: true,
@@ -39,8 +63,8 @@ export const NAVIGATION_REGISTRY: Record<string, NavigationConfig> = {
       path: ['TestNav', 'Analytics', 'Reports'],
     },
   },
-  
-  '/testnav/analytics/reports/users': {
+
+  '/dev/testnav/analytics/reports/users': {
     title: 'User Reports',
     sidebar: {
       enabled: true,
@@ -52,8 +76,8 @@ export const NAVIGATION_REGISTRY: Record<string, NavigationConfig> = {
       path: ['TestNav', 'Analytics', 'Reports', 'Users'],
     },
   },
-  
-  '/testnav/settings': {
+
+  '/dev/testnav/settings': {
     title: 'Settings Overview',
     sidebar: {
       enabled: true,
@@ -64,8 +88,8 @@ export const NAVIGATION_REGISTRY: Record<string, NavigationConfig> = {
       path: ['TestNav', 'Settings'],
     },
   },
-  
-  '/testnav/settings/profile': {
+
+  '/dev/testnav/settings/profile': {
     title: 'Profile Settings',
     sidebar: {
       enabled: true,
